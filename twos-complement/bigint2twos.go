@@ -1,10 +1,13 @@
 package twoscomplement
 
-import "math/big"
+import (
+	"fmt"
+	"math/big"
+)
 
 var bigOne = big.NewInt(1)
 
-// ToBytes returns a variable length two's complement byte array representation of the input.
+// ToBytes returns a byte array of variable length representing the input big.Int in two's complement.
 // Does not alter input.
 func ToBytes(bi *big.Int) []byte {
 	var resultBytes []byte
@@ -12,12 +15,12 @@ func ToBytes(bi *big.Int) []byte {
 	case -1:
 		// compute 2's complement
 		plus1 := big.NewInt(0)
-		plus1 = plus1.Add(bi, big.NewInt(1)) // add 1
+		plus1 = plus1.Add(bi, bigOne) // add 1
 		resultBytes = plus1.Bytes()
 		for i, b := range resultBytes {
 			resultBytes[i] = ^b // negate every bit
 		}
-		if len(resultBytes) == 0 || resultBytes[0]>>7 != 1 {
+		if len(resultBytes) == 0 || msbIsZero(resultBytes[0]) {
 			// if test bit is not 1,
 			// add another byte in front
 			// to disambiguate from a positive number
@@ -27,7 +30,7 @@ func ToBytes(bi *big.Int) []byte {
 		return []byte{}
 	case 1:
 		resultBytes = bi.Bytes()
-		if resultBytes[0]>>7 != 0 {
+		if msbIsOne(resultBytes[0]) {
 			// if test bit is not 0,
 			// add another byte in front
 			// to disambiguate from a negative number
@@ -40,16 +43,30 @@ func ToBytes(bi *big.Int) []byte {
 
 // ToBytesOfLength returns a byte array representation, 2's complement if number is negative.
 // Big endian.
-func ToBytesOfLength(i *big.Int, bytesLength int) []byte {
-	var resultBytes []byte
+// Will return error if value does not fit in requested number of bytes.
+func ToBytesOfLength(i *big.Int, bytesLength int) ([]byte, error) {
 	switch i.Sign() {
 	case -1:
 		// compute 2's complement
 		plus1 := big.NewInt(0)
-		plus1 = plus1.Add(i, big.NewInt(1)) // add 1
+		plus1 = plus1.Add(i, bigOne) // add 1
 		plus1Bytes := plus1.Bytes()
+
+		// validation
+		minimumBytes := len(plus1Bytes)
+		if len(plus1Bytes) == 0 || msbIsOne(plus1Bytes[0]) {
+			// if leading bit is not 0, then the resulting test bit will not be 1 (gets XOR-ed),
+			// require another byte in front
+			// to disambiguate from a positive number
+			minimumBytes++
+		}
+		if bytesLength < minimumBytes {
+			return []byte{}, fmt.Errorf("representation of %d does not fit in %d bytes", i, bytesLength)
+		}
+
+		// copy bytes
 		offset := len(plus1Bytes) - bytesLength
-		resultBytes = make([]byte, bytesLength)
+		resultBytes := make([]byte, bytesLength)
 		for i := 0; i < bytesLength; i++ {
 			j := offset + i
 			if j < 0 {
@@ -58,25 +75,29 @@ func ToBytesOfLength(i *big.Int, bytesLength int) []byte {
 				resultBytes[i] = ^plus1Bytes[j] // also negate every bit
 			}
 		}
-		break
+		return resultBytes, nil
 	case 0:
 		// just zeroes
-		resultBytes = make([]byte, bytesLength)
-		break
+		return make([]byte, bytesLength), nil
 	case 1:
 		originalBytes := i.Bytes()
-		resultBytes = make([]byte, bytesLength)
-		offset := len(originalBytes) - bytesLength
-		for i := 0; i < bytesLength; i++ {
-			j := offset + i
-			if j < 0 {
-				resultBytes[i] = 0 // pad left with 00000000
-			} else {
-				resultBytes[i] = originalBytes[j]
-			}
+
+		// validation
+		minimumBytes := len(originalBytes)
+		if msbIsOne(originalBytes[0]) {
+			// if test bit is not 0,
+			// add another byte in front
+			// to disambiguate from a negative number
+			minimumBytes++
 		}
-		break
+		if bytesLength < minimumBytes {
+			return []byte{}, fmt.Errorf("representation of %d does not fit in %d bytes", i, bytesLength)
+		}
+
+		// copy bytes
+		return CopyAlignRight(originalBytes, bytesLength), nil
 	}
 
-	return resultBytes
+	// unreachable
+	panic("unreachable")
 }
